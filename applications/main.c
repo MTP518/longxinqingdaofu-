@@ -1,389 +1,95 @@
-/*
-file: test_user_i2c.c
-测试祼机i2c2驱动程序ls1c_i2c.c 在finsh 中运行
-1. test_at24(1,17) //使用i2c1 , 写入at24c32(地址0~31)数据(17*i(i=0~31)),再读出并打印
-   test_at2402(1,17) //使用i2c1 , 写入at24c02(地址0~7)数据(17*i(i=0~7)),再读出并打印
-2. ds3231_getdata(1) //使用i2c1,读出ds3231的日期
-3. ds3231_gettime(1)  //使用i2c1,读出ds3231的时间
-4. ds3231_setdata(1,180101)  //使用i2c1,写入ds3231的日期(2018.1.1)
-5. ds3231_settime(1,140000)  //使用i2c1,写入ds3231的时间(14：00：00)
- */
-#include <rtthread.h>  
-#include <stdlib.h>  
-#include "ls1c.h"  
-#include "ls1c_public.h"  
-#include "ls1c_i2c.h"  
-#include "ls1c_pin.h"  
-  
-// I2C1
-#define LS1C_I2C_SDA1            (2)  
-#define LS1C_I2C_SCL1            (3)  
-  
-// I2C2 
-#define LS1C_I2C_SDA2          (54)  
-#define LS1C_I2C_SCL2          (55)  
-  
-// 测试at24C32  页面长度32 字节 ，地址2 字节
-void test_at24(rt_int8_t ic_no, rt_int8_t num )    
-{  
-    int i;
-    ls1c_i2c_info_t i2c_info;  
-    int slave_addr = 0xAE >> 1;    
-    unsigned char send_buff[64] = {0};  
-    unsigned char recv_buff[64] = {0};  
-      
-    i2c_info.clock = 50*1000;       // 50kb/s  
-    switch( ic_no)
+Button key2(GET_PIN(E, 0), false, PIN_MODE_INPUT_PULLUP, 30);
+    Button key3(GET_PIN(D, 6), false, PIN_MODE_INPUT_PULLUP, 30);
+
+    CalcSpeed<double, 50> left("htm2", 50000);
+    CalcSpeed<double, 50> left("htm2", 30000);
+    //left.setInverse(true);
+    CalcSpeed<double, 50> right("htm1", 50000);
+    CalcSpeed<double, 50> right("htm4", 32000);
+
+    double refl = 0;
+    double refr = 0;
+    Pid<double> pleft(refl, 800, 2, 1, 100000, -100000);
+    Pid<double> pright(refr, 800, 2, 1, 100000, -100000);
+
+    Pwm right_pwm("pwm4" ,100000, 1 ,2);
+    Pwm right_pwm("pwm1" ,100000, 1 ,2);
+    Pwm left_pwm("pwm3" ,100000, 1 ,2);
+    //left_pwm.setInverse(true);
+
+    double wheel_base = 0.21; //m
+    double wheel_radius = 0.035; //m
+
+
+
+    while (1)
     {
-      case 0:
-        i2c_info.I2Cx = LS1C_I2C_0;
-      break;
-      case 1:
-          i2c_info.I2Cx = LS1C_I2C_1;
-      break;
-      case 2:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
-      default:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
+         static double speed[2] = {0.0, 0.0};
+        rt_mq_recv(&mq, &speed, 2*sizeof(double), 0);
+        if(abs(speed[0]) > 0 && abs(speed[1]) == 0){
+            pleft.setRef(speed[0]*100);
+            pright.setRef(speed[0]*100);
+        }else if(abs(speed[1]) > 0 && abs(speed[0]) == 0){
+            pleft.setRef(-speed[1]*100);
+            pright.setRef(speed[1]*100);
+        }else if(abs(speed[1]) == 0 && abs(speed[0]) == 0){
+            pleft.setRef(0);
+            pright.setRef(0);
+        double left_speed = (60 * (2 * speed[0] - wheel_base * speed[1]) * 0.5f) / (2*3.14*wheel_radius);
+        double right_speed = (60 * (2 * speed[0] + wheel_base * speed[1]) * 0.5f) / (2*3.14*wheel_radius);
+
+        if(fabs(left_speed) > 200){
+            left_speed = left_speed > 0 ? 200 : -200;
+        }
+        if(fabs(right_speed) > 200){
+            right_speed = right_speed > 0 ? 200 : -200;
+       }
+
+        pleft.setRef(left_speed);
+        pright.setRef(right_speed);
+
+        /****************/
+//        left_pwm.setCW(50000);
+@@ -103,7 +109,7 @@ void speedThread(void* parameter)
+        /********************/
+        if(cnt++ >= 100){
+            cnt = 0;
+            //rt_kprintf("%f|%f|%f|%f\r\n", left.calc(), right.calc(), speed[0], speed[1]);
+            rt_kprintf("%f|%f|%f|%f\r\n", left.calc(), right.calc(), left_speed, right_speed);
+        }
+        rt_thread_mdelay(1);
     }
-    i2c_init(&i2c_info);  
-      
-    send_buff[0] = 0x00;
-    send_buff[1] = 0x00;            
-    for(i=0;i<32;i++)
-    {
-        send_buff[i+2] = i*num;
-    }
-    
-    // 发送器件地址和要写入的地址、数据
-    i2c_send_start_and_addr(&i2c_info, slave_addr, LS1C_I2C_DIRECTION_WRITE);  
-    i2c_receive_ack(&i2c_info);  
-    i2c_send_data(&i2c_info, send_buff, 34);  
-    rt_thread_delay(1);  
-    i2c_send_stop(&i2c_info);  
-
-    rt_thread_delay(2);  
-    // 发送读指令  的地址
-    i2c_send_start_and_addr(&i2c_info, slave_addr, LS1C_I2C_DIRECTION_WRITE);  
-    i2c_receive_ack(&i2c_info);  
-    i2c_send_data(&i2c_info, send_buff, 2);  
-    i2c_send_stop(&i2c_info);  
-
-    // 读取一页寄存器数据  
-    i2c_send_start_and_addr(&i2c_info, slave_addr, LS1C_I2C_DIRECTION_READ);  
-    i2c_receive_ack(&i2c_info); 
-    i2c_receive_data(&i2c_info, recv_buff, 32);  
-    i2c_send_stop(&i2c_info);  
- 
-    for(i=0;i<32;i++)
-    {
-        rt_kprintf("  0x%02x  ",  recv_buff[i] );
-    }
-    rt_kprintf("\n\r");
-}
-
-// 测试at24C02   I2C总线E2PROM  2KBit  每页8字节  一共256页 ，写的时候注意地址范围是0-255
-void test_at2402(rt_int8_t ic_no, rt_int8_t num )    
-{  
-    int i;
-    ls1c_i2c_info_t i2c_info;  
-    int slave_addr = 0x50;    
-    unsigned char send_buff[64] = {0};  
-    unsigned char recv_buff[64] = {0};  
-      
-    i2c_info.clock = 50*1000;       // 50kb/s  
-    switch( ic_no)
-    {
-      case 0:
-        i2c_info.I2Cx = LS1C_I2C_0;
-      break;
-      case 1:
-          i2c_info.I2Cx = LS1C_I2C_1;
-      break;
-      case 2:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
-      default:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
-    }
-    i2c_init(&i2c_info);  
-      
-    send_buff[0] = 0x00;
-    for(i=0;i<8;i++)
-    {
-        send_buff[i+1] = i*num;
-    }
-    
-    // 发送器件地址和要写入的地址、数据
-    i2c_send_start_and_addr(&i2c_info, slave_addr, LS1C_I2C_DIRECTION_WRITE);  
-    i2c_receive_ack(&i2c_info);  
-    i2c_send_data(&i2c_info, send_buff, 9);  
-    rt_thread_delay(1);  
-    i2c_send_stop(&i2c_info);  
-	
-    rt_thread_delay(2);  
-
-    // 发送读指令  的地址
-    i2c_send_start_and_addr(&i2c_info, slave_addr, LS1C_I2C_DIRECTION_WRITE);  
-    i2c_receive_ack(&i2c_info);  
-    i2c_send_data(&i2c_info, send_buff, 1);  
-    i2c_send_stop(&i2c_info);  
-
-    // 读取一页寄存器数据  
-    i2c_send_start_and_addr(&i2c_info, slave_addr, LS1C_I2C_DIRECTION_READ);  
-    i2c_receive_ack(&i2c_info); 
-    i2c_receive_data(&i2c_info, recv_buff, 8);  
-    i2c_send_stop(&i2c_info);  
- 
-    for(i=0;i<8;i++)
-    {
-        rt_kprintf("  0x%02x  ",  recv_buff[i] );
-    }
-    rt_kprintf("\n\r");
-}
-
-/* 测试ds3231   */
-#define ds3231_slave_addr 0x68
-#define bcd(x)  ( ((x/10)<<4) | (x%10))
-#define frombcd(x)   ((x >> 4) * 10 + (x & 0x0f))
-
-void ds3231_getdata(rt_int8_t ic_no )    
-{  
-    ls1c_i2c_info_t i2c_info;  
-    unsigned char send_buff[64] = {0};  
-    unsigned char recv_buff[64] = {0};  
-      
-    i2c_info.clock = 50*1000;       // 50kb/s  
-    switch( ic_no)
-        {
-        case 0:
-        i2c_info.I2Cx = LS1C_I2C_0;
-      break;
-      case 1:
-          i2c_info.I2Cx = LS1C_I2C_1;
-      break;
-      case 2:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
-      default:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
-}
-    i2c_init(&i2c_info);  
-      
-    send_buff[0] = 0x04;    
-    // 发送器件地址和要写入的地址、数据
-    i2c_send_start_and_addr(&i2c_info, ds3231_slave_addr, LS1C_I2C_DIRECTION_WRITE);  
-    i2c_receive_ack(&i2c_info);  
-    i2c_send_data(&i2c_info, send_buff, 1);  
-    rt_thread_delay(1);  
-    i2c_send_stop(&i2c_info);  
-
-    // 读取数据
-    rt_thread_delay(2);  
-    i2c_send_start_and_addr(&i2c_info, ds3231_slave_addr, LS1C_I2C_DIRECTION_READ);  
-    i2c_receive_ack(&i2c_info); 
-    i2c_receive_data(&i2c_info, recv_buff, 3);  
-    i2c_send_stop(&i2c_info);  
-
- 
-    rt_kprintf("\ndata : 20%02d-%02d-%02d\n ",frombcd(recv_buff[2]),frombcd(recv_buff[1]),frombcd(recv_buff[0]));
-    rt_kprintf("\n\r");
-}
-
-void ds3231_gettime(rt_int8_t ic_no )    
-{  
-    ls1c_i2c_info_t i2c_info;  
-    unsigned char send_buff[64] = {0};  
-    unsigned char recv_buff[64] = {0};  
-      
-    i2c_info.clock = 50*1000;       // 50kb/s  
-    switch( ic_no)
-        {
-        case 0:
-        i2c_info.I2Cx = LS1C_I2C_0;
-      break;
-      case 1:
-          i2c_info.I2Cx = LS1C_I2C_1;
-      break;
-      case 2:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
-      default:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
-}
-    i2c_init(&i2c_info);  
-      
-    send_buff[0] = 0x00;    
-    // 发送器件地址和要写入的地址、数据
-    i2c_send_start_and_addr(&i2c_info, ds3231_slave_addr, LS1C_I2C_DIRECTION_WRITE);  
-    i2c_receive_ack(&i2c_info);  
-    i2c_send_data(&i2c_info, send_buff, 1);  
-    rt_thread_delay(1);  
-    i2c_send_stop(&i2c_info);  
-
-    // 读取数据
-    rt_thread_delay(2);  
-    i2c_send_start_and_addr(&i2c_info, ds3231_slave_addr, LS1C_I2C_DIRECTION_READ);  
-    i2c_receive_ack(&i2c_info); 
-    i2c_receive_data(&i2c_info, recv_buff, 3);  
-    i2c_send_stop(&i2c_info);  
-
- 
-    rt_kprintf("\ntime : %02d:%02d:%02d\n",frombcd(recv_buff[2]),frombcd(recv_buff[1]),frombcd(recv_buff[0]));
-    rt_kprintf("\n\r");
-}
-
-/*设置日期格式为yymmdd。如2018-01-01写为180101*/
-void ds3231_setdata(rt_int8_t ic_no , rt_uint32_t data)    
-{  
-    ls1c_i2c_info_t i2c_info;  
-    unsigned char send_buff[64] = {0};  
-    unsigned char recv_buff[64] = {0};  
-    rt_uint8_t yy,mm,dd;
-    
-    yy = data / 10000;
-    mm = data % 10000  / 100;
-    dd= data % 100;
-
-    //设置寄存器地址4    
-    send_buff[0]=4;//寄存器地址4
-    send_buff[1]=bcd(dd);//日
-    send_buff[2]=bcd(mm);//月
-    send_buff[3]=bcd(yy);//年
-    
-    i2c_info.clock = 50*1000;       // 50kb/s  
-    switch( ic_no)
-        {
-        case 0:
-        i2c_info.I2Cx = LS1C_I2C_0;
-      break;
-      case 1:
-          i2c_info.I2Cx = LS1C_I2C_1;
-      break;
-      case 2:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
-      default:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
-}
-    i2c_init(&i2c_info);  
-
-    // 发送器件地址和要写入的地址、数据
-    i2c_send_start_and_addr(&i2c_info, ds3231_slave_addr, LS1C_I2C_DIRECTION_WRITE);  
-    i2c_receive_ack(&i2c_info);  
-    i2c_send_data(&i2c_info, send_buff, 4);  
-    rt_thread_delay(1);  
-    i2c_send_stop(&i2c_info);  
-}
-
-/*设置到ds3231。 格式为hhmmss。如14:00:00写为140000*/
-void ds3231_settime(rt_int8_t ic_no , rt_uint32_t time)    
-{  
-    ls1c_i2c_info_t i2c_info;  
-    unsigned char send_buff[64] = {0};  
-    unsigned char recv_buff[64] = {0};  
-    rt_uint8_t hh,mm,ss;
-    
-    hh = time / 10000;
-    mm = time % 10000  / 100;
-    ss = time % 100;
-
-    //设置寄存器地址0    
-    send_buff[0]=0;//寄存器地址0
-    send_buff[1]=bcd(ss);//秒
-    send_buff[2]=bcd(mm);//分
-    send_buff[3]=bcd(hh);//时
-    
-    i2c_info.clock = 50*1000;       // 50kb/s  
-    switch( ic_no)
-        {
-        case 0:
-        i2c_info.I2Cx = LS1C_I2C_0;
-      break;
-      case 1:
-          i2c_info.I2Cx = LS1C_I2C_1;
-      break;
-      case 2:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
-      default:
-          i2c_info.I2Cx = LS1C_I2C_2;
-      break;
-}
-    i2c_init(&i2c_info);  
-      
-    
-    // 发送器件地址和要写入的地址、数据
-    i2c_send_start_and_addr(&i2c_info, ds3231_slave_addr, LS1C_I2C_DIRECTION_WRITE);  
-    i2c_receive_ack(&i2c_info);  
-    i2c_send_data(&i2c_info, send_buff, 4);  
-    rt_thread_delay(1);  
-    i2c_send_stop(&i2c_info);  
-}
-
-void test_at24_msh(int argc, char** argv)
-{
-    unsigned int num1,num2;
-	num1 = strtoul(argv[1], NULL, 0);
-	num2 = strtoul(argv[2], NULL, 0);
-	test_at24(num1, num2);
-}
-void test_at2402_msh(int argc, char** argv)
-{
-    unsigned int num1,num2;
-	num1 = strtoul(argv[1], NULL, 0);
-	num2 = strtoul(argv[2], NULL, 0);
-	test_at2402(num1, num2);
-}
-void ds3231_getdata_msh(int argc, char** argv)
-{
-    unsigned int num1,num2;
-	num1 = strtoul(argv[1], NULL, 0);
-	ds3231_getdata(num1);
-}
-void ds3231_gettime_msh(int argc, char** argv)
-{
-    unsigned int num1,num2;
-	num1 = strtoul(argv[1], NULL, 0);
-	ds3231_gettime(num1);
-}
-void ds3231_setdata_msh(int argc, char** argv)
-{
-    unsigned int num1,num2;
-	num1 = strtoul(argv[1], NULL, 0);
-	num2 = strtoul(argv[2], NULL, 0);
-	ds3231_setdata(num1, num2);
-}
-void ds3231_settime_msh(int argc, char** argv)
-{
-    unsigned int num1,num2;
-	num1 = strtoul(argv[1], NULL, 0);
-	num2 = strtoul(argv[2], NULL, 0);
-	ds3231_settime(num1, num2);
-}
-int main()
-{
-    return;
-
-}
- #include  <finsh.h> 
-FINSH_FUNCTION_EXPORT(test_at24 , test_at24  e.g.test_at24(1,17));
-FINSH_FUNCTION_EXPORT(test_at2402 , test_at2402  e.g.test_at2402(2,17));
-FINSH_FUNCTION_EXPORT(ds3231_getdata , ds3231_getdata  e.g.ds3231_getdata(1));
-FINSH_FUNCTION_EXPORT(ds3231_gettime , ds3231_gettime  e.g.ds3231_gettime(1));
-FINSH_FUNCTION_EXPORT(ds3231_setdata , ds3231_setdata  e.g.ds3231_setdata(1,180101));
-FINSH_FUNCTION_EXPORT(ds3231_settime , ds3231_settime  e.g.ds3231_settime(1,140000));
-/* 导出到 msh 命令列表中 */
-MSH_CMD_EXPORT(test_at24_msh, test_at24_msh 1 17);
-MSH_CMD_EXPORT(test_at2402_msh, test_at2402_msh 2 17);
-MSH_CMD_EXPORT(ds3231_getdata_msh, ds3231_getdata_msh 1);
-MSH_CMD_EXPORT(ds3231_gettime_msh, ds3231_gettime_msh 1);
-MSH_CMD_EXPORT(ds3231_setdata_msh, ds3231_setdata_msh 1 180101);
-MSH_CMD_EXPORT(ds3231_settime_msh, ds3231_settime_msh 1 140000);
-
+	     if(_first){
+            _first = false;
+            _last_time = rt_tick_get();
+            if(strcmp(_encode_name, "htm1") == 0){
+                _last_cnt = getCounter(1);
+            if(strcmp(_encode_name, "htm4") == 0){
+                _last_cnt = getCounter(4);
+            }else if(strcmp(_encode_name, "htm2") == 0){
+                _last_cnt = getCounter(2);
+            }
+        }
+        rt_uint32_t now_cnt;
+        if(strcmp(_encode_name, "htm1") == 0){
+            now_cnt = getCounter(1);
+        rt_int16_t now_cnt;
+        if(strcmp(_encode_name, "htm4") == 0){
+            now_cnt = getCounter(4);
+        }else if(strcmp(_encode_name, "htm2") == 0){
+            now_cnt = getCounter(2);
+        }
+        rt_int32_t diff_cnt = (now_cnt - _last_cnt);
+        rt_int16_t diff_cnt = (now_cnt - _last_cnt);
+        rt_tick_t now_time = rt_tick_get();
+        rt_tick_t diff_t = now_time - _last_time;
+        diff_t = diff_t == 0 ? 1 : diff_t;
+@@ -55,7 +55,7 @@ class CalcSpeed {
+private:
+    SlideWindow<T, N> _filter;
+    char _encode_name[6];
+    rt_uint32_t _last_cnt{0};
+    rt_int16_t _last_cnt{0};
+    rt_tick_t _last_time{0};
+    TIM_HandleTypeDef _tim;
+    rt_uint16_t _cpr{50000};
